@@ -13,7 +13,7 @@ class MusicLibrary:
 
     SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".mp4", ".m4a"}
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str = "/home/admins/musica"):
         self.base_dir = base_dir
 
     def scan(self, music_type: str) -> list[str]:
