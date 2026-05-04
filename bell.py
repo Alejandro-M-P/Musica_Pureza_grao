@@ -11,18 +11,30 @@ from src.cron_helper import CronHelper
 from src.library import MusicLibrary
 from src.state import StateManager
 
-# Configure logging to /var/log/colegio-bell.log with timestamps
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%dT%H:%M:%S',
-    handlers=[
-        logging.FileHandler('/var/log/colegio-bell.log'),
-        logging.StreamHandler(sys.stdout),
-    ]
-)
-
 logger = logging.getLogger(__name__)
+
+
+def setup_logging(log_file='/var/log/colegio-bell.log'):
+    """Configure logging with fallback to project directory if no permission."""
+    handlers = [logging.StreamHandler(sys.stdout)]
+    
+    # Try to use the specified log file, fallback to local if no permission
+    try:
+        file_handler = logging.FileHandler(log_file)
+        handlers.append(file_handler)
+    except PermissionError:
+        # Fallback: use state/ directory in project
+        local_log = '/home/admins/colegio/state/colegio-bell.log'
+        file_handler = logging.FileHandler(local_log)
+        handlers.append(file_handler)
+        print(f"Warning: No permission for {log_file}, using {local_log}", file=sys.stderr)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%dT%H:%M:%S',
+        handlers=handlers
+    )
 
 VALID_MUSIC_TYPES = ["entrada", "cambio", "recreo", "salida"]
 
@@ -65,13 +77,17 @@ def parse_args(args=None):
     return parser.parse_args(args)
 
 
-def is_weekend():
+def is_weekend(today=None):
     """Check if today is weekend (Saturday=5, Sunday=6).
+
+    Args:
+        today: Optional datetime to check (for testing). If None, uses datetime.now().
 
     Returns:
         True if weekend, False if weekday.
     """
-    today = datetime.now()
+    if today is None:
+        today = datetime.now()
     # weekday(): Monday=0, Sunday=6
     return today.weekday() >= 5
 
@@ -120,6 +136,7 @@ def main(args=None):
     Args:
         args: Command-line arguments (for testing). If None, uses sys.argv.
     """
+    setup_logging()  # Configure logging when main runs
     parsed = parse_args(args)
 
     # Handle --status

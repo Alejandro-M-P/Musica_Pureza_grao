@@ -90,60 +90,44 @@ class TestBellCLIParseArgs(unittest.TestCase):
 class TestBellCLIWeekendCheck(unittest.TestCase):
     """Test weekend skip logic per spec requirement."""
 
-    @patch('bell.datetime')
-    def test_is_weekend_saturday_returns_true(self, mock_datetime):
+    def test_is_weekend_saturday_returns_true(self):
         """Saturday should be detected as weekend."""
         from bell import is_weekend
+        from datetime import datetime
 
-        # Mock Saturday (weekday=5)
-        mock_now = MagicMock()
-        mock_now.weekday.return_value = 5  # Saturday
-        mock_datetime.datetime.now.return_value = mock_now
-
-        result = is_weekend()
-
+        # Pass Saturday directly
+        saturday = datetime(2026, 5, 9)  # Saturday May 9, 2026
+        result = is_weekend(today=saturday)
         self.assertTrue(result)
 
-    @patch('bell.datetime')
-    def test_is_weekend_sunday_returns_true(self, mock_datetime):
+    def test_is_weekend_sunday_returns_true(self):
         """Sunday should be detected as weekend."""
         from bell import is_weekend
+        from datetime import datetime
 
-        # Mock Sunday (weekday=6)
-        mock_now = MagicMock()
-        mock_now.weekday.return_value = 6  # Sunday
-        mock_datetime.datetime.now.return_value = mock_now
-
-        result = is_weekend()
-
+        # Pass Sunday directly
+        sunday = datetime(2026, 5, 10)  # Sunday May 10, 2026
+        result = is_weekend(today=sunday)
         self.assertTrue(result)
 
-    @patch('bell.datetime')
-    def test_is_weekend_monday_returns_false(self, mock_datetime):
-        """Monday should NOT be detected as weekend."""
-        from bell import is_weekend
-
-        # Mock Monday (weekday=0)
-        mock_now = MagicMock()
-        mock_now.weekday.return_value = 0  # Monday
-        mock_datetime.datetime.now.return_value = mock_now
-
-        result = is_weekend()
-
-        self.assertFalse(result)
-
-    @patch('bell.datetime')
-    def test_is_weekend_friday_returns_false(self, mock_datetime):
+    def test_is_weekend_friday_returns_false(self):
         """Friday should NOT be detected as weekend."""
         from bell import is_weekend
+        from datetime import datetime
 
-        # Mock Friday (weekday=4)
-        mock_now = MagicMock()
-        mock_now.weekday.return_value = 4  # Friday
-        mock_datetime.datetime.now.return_value = mock_now
+        # Pass Friday directly
+        friday = datetime(2026, 5, 8)  # Friday May 8, 2026
+        result = is_weekend(today=friday)
+        self.assertFalse(result)
 
-        result = is_weekend()
+    def test_is_weekend_monday_returns_false(self):
+        """Monday should NOT be detected as weekend."""
+        from bell import is_weekend
+        from datetime import datetime
 
+        # Pass Monday directly
+        monday = datetime(2026, 5, 4)  # Monday May 4, 2026 (today)
+        result = is_weekend(today=monday)
         self.assertFalse(result)
 
 
@@ -163,14 +147,15 @@ class TestBellCLIMainFlow(unittest.TestCase):
     def test_main_weekend_skip_logs_message(self, mock_player_class, mock_is_weekend):
         """On weekend, main() skips playback and logs 'Weekend - no bell'."""
         from bell import main
+        from bell import logger
 
         mock_is_weekend.return_value = True
 
-        with patch('bell.logging') as mock_logging:
+        with patch.object(logger, 'info') as mock_info:
             main(["cambio"])
 
             # Should log weekend skip message
-            mock_logging.getLogger.return_value.info.assert_called_with("Weekend - no bell")
+            mock_info.assert_called_with("Weekend - no bell")
 
     @patch('bell.is_weekend')
     @patch('bell.MusicPlayer')
