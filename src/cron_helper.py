@@ -1,7 +1,10 @@
 """CronHelper — manages crontab entries for school bell schedule."""
 
-import subprocess
 import logging
+import subprocess
+import tempfile
+
+from src.state import StateManager
 
 logger = logging.getLogger(__name__)
 
@@ -12,15 +15,28 @@ PROJECT_DIR = "/home/admins/colegio"
 MUSIC_BASE = "/home/admins/musica"
 
 
+def load_schedule() -> dict:
+    """Load schedule from StateManager (carousel.json).
+
+    Returns:
+        Dict with schedule times, or default schedule if file missing/error.
+    """
+    state_manager = StateManager()
+    return state_manager.get_schedule()
+
+
 class CronHelper:
     """Manages crontab entries for bell schedule."""
 
-    BELL_TIMES = {
-        "entrada": ["8:05", "15:15"],
-        "cambio": ["9:00", "9:55", "12:00", "12:55", "16:10"],
-        "recreo": ["10:45", "11:05"],
-        "salida": ["13:50", "17:05"],
-    }
+    # Compatibilidad hacia atrás: BELL_TIMES como property
+    @property
+    def BELL_TIMES(self) -> dict:
+        """Alias de compatibilidad hacia atrás para self.schedule."""
+        return self.schedule
+
+    def __init__(self):
+        """Initialize CronHelper, loading schedule from JSON."""
+        self.schedule = load_schedule()
 
     def generate_crontab(self) -> str:
         """Generate all crontab entries as string.
@@ -41,7 +57,7 @@ class CronHelper:
         env_vars = "DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/1000"
 
         # Generate entries for each music type
-        for music_type, times in self.BELL_TIMES.items():
+        for music_type, times in self.schedule.items():
             for time_str in times:
                 # Parse time (format: "HH:MM")
                 parts = time_str.split(":")

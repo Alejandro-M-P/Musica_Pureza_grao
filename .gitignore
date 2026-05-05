@@ -34,3 +34,6 @@ state/
 
 # Logs
 *.log
+
+# Environment variables (credentials)
+.env

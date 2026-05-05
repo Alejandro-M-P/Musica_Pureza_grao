@@ -75,3 +75,38 @@ class StateManager:
 
         state[music_type].update(kwargs)
         self.save(state)
+
+    # Schedule management (horarios de timbre)
+    DEFAULT_SCHEDULE = {
+        "entrada": ["08:05", "15:15"],
+        "cambio": ["09:00", "09:55", "12:00", "12:55", "16:10"],
+        "recreo": ["10:45", "11:05"],
+        "salida": ["13:50", "17:05"],
+    }
+
+    def get_schedule(self) -> dict:
+        """Get full schedule (music_type -> list of times)."""
+        state = self.load()
+        schedule = state.get("schedule")
+        if not schedule:
+            # Initialize with defaults if not present
+            schedule = self.DEFAULT_SCHEDULE.copy()
+            self.update_schedule(schedule)
+        return schedule
+
+    def get_schedule_times(self, music_type: str) -> list[str]:
+        """Get times for a specific music type."""
+        schedule = self.get_schedule()
+        return schedule.get(music_type, [])
+
+    def update_schedule(self, new_schedule: dict) -> None:
+        """Update full schedule and persist."""
+        state = self.load()
+        state["schedule"] = new_schedule
+        self.save(state)
+
+    def update_schedule_times(self, music_type: str, times: list[str]) -> None:
+        """Update times for specific music type."""
+        schedule = self.get_schedule()
+        schedule[music_type] = times
+        self.update_schedule(schedule)
