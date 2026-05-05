@@ -1,0 +1,14 @@
+[Unit]
+Description=School Bell System - Flask Web Interface
+After=network.target
+
+[Service]
+Type=simple
+User=admins
+WorkingDirectory=/home/admins/colegio
+ExecStart=/usr/bin/python3 /home/admins/colegio/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

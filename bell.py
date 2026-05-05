@@ -73,6 +73,11 @@ def parse_args(args=None):
         action="store_true",
         help="Show last played and next queued song per type"
     )
+    parser.add_argument(
+        "--check",
+        metavar="TIME",
+        help="Check if music should play at this time (e.g. 8:05). Returns 0 if yes, 1 if no."
+    )
 
     return parser.parse_args(args)
 
@@ -130,6 +135,34 @@ def show_status():
     print("\n" + "=" * 60)
 
 
+def check_time(time_str: str, music_type: str = None):
+    """Check if current time matches any scheduled bell time.
+
+    Args:
+        time_str: Time to check in HH:MM format
+        music_type: Specific music type to check (optional)
+
+    Returns:
+        True if there's a scheduled bell at this time, False otherwise
+    """
+    from src.cron_helper import CronHelper
+
+    helper = CronHelper()
+    scheduled_time = time_str
+
+    if music_type:
+        # Check specific music type
+        times = helper.BELL_TIMES.get(music_type, [])
+        return scheduled_time in times
+
+    # Check if ANY music type matches this time
+    for mtype, times in helper.BELL_TIMES.items():
+        if scheduled_time in times:
+            return True
+
+    return False
+
+
 def main(args=None):
     """Main entry point for bell CLI.
 
@@ -143,6 +176,16 @@ def main(args=None):
     if parsed.status:
         show_status()
         return
+
+    # Handle --check
+    if parsed.check:
+        should_play = check_time(parsed.check, parsed.type)
+        if should_play:
+            print(f"YES: {parsed.type or 'any'} at {parsed.check}")
+            sys.exit(0)
+        else:
+            print(f"NO: no bell scheduled at {parsed.check}")
+            sys.exit(1)
 
     # Handle --setup-cron
     if parsed.setup_cron:
