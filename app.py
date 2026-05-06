@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import threading
 import time
+import functools
 from datetime import datetime
 
 # Cargar variables de entorno desde .env
@@ -33,7 +34,7 @@ def validate_credentials(username: str, password: str) -> bool:
     """Valida usuario y contraseña contra .env"""
     return username == WEB_USER and password == WEB_PASSWORD
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, session, jsonify, request, send_from_directory, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
@@ -65,6 +66,10 @@ MUSIC_TYPES = ["entrada", "salida", "cambio", "recreo"]
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "school-bell-secret-key-change-in-production"
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["SESSION_COOKIE_HTTPONLY"] = True  # No accesible desde JS
+app.config["SESSION_COOKIE_SECURE"] = False  # True si usas HTTPS
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # Protege contra CSRF
+app.config["PERMANENT_SESSION_LIFETIME"] = 0  # Muere al cerrar navegador
 
 # Habilitar CORS para todos los orígenes (accesible desde otros PCs)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -78,21 +83,9 @@ def serve_static(filename):
 
 @app.route("/index.html")
 def serve_index():
-    """Solo accesible si está logueado."""
+    """Solo accesible si está logueado - redirige a / si está autenticado."""
     if not flask_session.get("username"):
-        return '''<!DOCTYPE html>
-<html lang="es">
-<head><meta charset="UTF-8"><title>Login - Sistema Timbres</title></head>
-<body style="font-family: sans-serif; padding: 50px; max-width: 400px; margin: 0 auto;">
-<h1>Login - Sistema de Timbres</h1>
-<p style="color: red;">Debes iniciar sesión primero.</p>
-<form method="post" action="/login">
-<p><label>Usuario: <input name="username" required style="padding: 8px; width: 100%; font-size: 16px;"></label></p>
-<p><label>Password: <input type="password" name="password" required style="padding: 8px; width: 100%; font-size: 16px;"></label></p>
-<p><button type="submit" style="padding: 12px 20px; background: #007bff; color: white; border: none; font-size: 16px; cursor: pointer;">Entrar</button></p>
-</form>
-</body>
-</html>''', 200, {"Content-Type": "text/html"}
+        return redirect("/login")
     return send_from_directory(STATIC_DIR, "index.html")
 
 # SocketIO
@@ -107,9 +100,64 @@ music_player = MusicPlayer(MUSIC_BASE)
 # Autenticación con credenciales Linux
 # ============================================================================
 
-import functools
-from flask import session as flask_session
+# Tokens activos (generados por WebSocket login)
+# Form: {token: {"username": str, "created_at": float}}
+# Los tokens expiran después de 4 horas (14400 segundos)
+active_tokens = {}
+TOKEN_EXPIRY_SECONDS = 14400  # 4 horas
+
+import secrets
 from werkzeug.security import check_password_hash
+import secrets
+
+
+def generate_token() -> dict:
+    """Generate a token with metadata for authentication.
+    
+    Returns:
+        dict con keys: token, created_at, expires_in
+    """
+    token = secrets.token_hex(16)
+    created_at = time.time()
+    return {
+        "token": token,
+        "created_at": created_at,
+        "expires_in": TOKEN_EXPIRY_SECONDS
+    }
+
+
+def validate_token(token: str) -> bool:
+    """Check if token is valid and not expired.
+    
+    Returns:
+        True si el token existe y no ha expirado.
+    """
+    if token not in active_tokens:
+        return False
+    token_data = active_tokens[token]
+    created_at = token_data.get("created_at", 0)
+    expiry_time = created_at + TOKEN_EXPIRY_SECONDS
+    return time.time() < expiry_time
+
+
+def get_token_username(token: str) -> str | None:
+    """Get username associated with token."""
+    if token in active_tokens:
+        return active_tokens[token].get("username")
+    return None
+
+
+def cleanup_expired_tokens():
+    """Remove expired tokens from active_tokens dict."""
+    current_time = time.time()
+    expired = [
+        token for token, data in active_tokens.items()
+        if current_time > data.get("created_at", 0) + TOKEN_EXPIRY_SECONDS
+    ]
+    for token in expired:
+        del active_tokens[token]
+    if expired:
+        logger.info(f"Cleaned up {len(expired)} expired tokens")
 
 
 # Users válidos (se validan contra sistema Linux)
@@ -165,14 +213,25 @@ def validate_linux_password(username: str, password: str) -> bool:
 
 
 def require_auth(f):
-    """Decorator require authentication for API routes."""
+    """Decorator require authentication for API routes.
+    
+    Accepts either:
+    - Flask session (cookie-based login from /login)
+    - X-Auth-Token header (WebSocket login)
+    """
     @functools.wraps(f)
     def decorated_function(*args, **kwargs):
-        # Check Flask session
+        # Check Flask session first (legacy)
         username = flask_session.get("username")
-        if not username:
-            return jsonify({"success": False, "error": "No autenticado"}), 401
-        return f(*args, **kwargs)
+        if username:
+            return f(*args, **kwargs)
+        
+        # Check token header (WebSocket login)
+        token = request.headers.get("X-Auth-Token")
+        if token and validate_token(token):
+            return f(*args, **kwargs)
+        
+        return jsonify({"success": False, "error": "No autenticado"}), 401
     return decorated_function
 
 
@@ -595,22 +654,51 @@ def mover_cancion():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """Página de login y handler."""
+    """Página de login y handler - genera token para autenticación."""
+    # Si ya está autenticado, ir al index
+    if flask_session.get("username"):
+        return redirect("/")
+    
     if request.method == "GET":
         return '''<!DOCTYPE html>
 <html lang="es">
 <head><meta charset="UTF-8"><title>Login - Sistema Timbres</title></head>
 <body style="font-family: sans-serif; padding: 50px; max-width: 400px; margin: 0 auto;">
 <h1>Login - Sistema de Timbres</h1>
-<form method="post">
+<form id="login-form">
 <p><label>Usuario: <input name="username" required style="padding: 8px; width: 100%; font-size: 16px;"></label></p>
 <p><label>Password: <input type="password" name="password" required style="padding: 8px; width: 100%; font-size: 16px;"></label></p>
 <p><button type="submit" style="padding: 12px 20px; background: #007bff; color: white; border: none; font-size: 16px; cursor: pointer;">Entrar</button></p>
 </form>
+<div id="error" style="color: red; margin-top: 10px;"></div>
+<script>
+document.getElementById('login-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const username = form.username.value;
+    const password = form.password.value;
+    try {
+        const resp = await fetch('/api/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username: username, password: password})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            localStorage.setItem('authToken', JSON.stringify(data));
+            window.location.href = '/';
+        } else {
+            document.getElementById('error').textContent = data.error || 'Error de autenticación';
+        }
+    } catch (err) {
+        document.getElementById('error').textContent = 'Error de conexión';
+    }
+};
+</script>
 </body>
 </html>''', 200, {"Content-Type": "text/html"}
     
-    # POST - validar credenciales
+    # POST - validar credenciales via API (para consistencia)
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     
@@ -621,12 +709,28 @@ def login():
     if not validate_credentials(username, password):
         return jsonify({"success": False, "error": "Usuario o password incorrecto"}), 401
     
-    # Create Flask session
-    flask_session["username"] = username
+    # Generar token (igual que api_login)
+    token_data = generate_token()
+    token = token_data["token"]
+    
+    # Guardar en active_tokens
+    active_tokens[token] = {
+        "username": username,
+        "created_at": token_data["created_at"]
+    }
+    
     logger.info(f"User logged in: {username}")
     
-    # Redirect to main page
-    return jsonify({"success": True, "redirect": "/"})
+    # Generar HTML que guarda token y redirige
+    html = f'''<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Redirecting...</title></head>
+<script>
+localStorage.setItem('authToken', JSON.stringify({json.dumps(token_data)}));
+window.location.href = '/';
+</script>
+</html>'''
+    return html, 200, {"Content-Type": "text/html"}
 
 
 @app.route("/logout", methods=["POST"])
@@ -639,26 +743,71 @@ def logout():
 
 
 # ============================================================================
+# API: Login con token (JSON)
+# ============================================================================
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    """POST /api/login — Autenticación con token que expira en 4 horas.
+    
+    Body JSON:
+        {"username": "...", "password": "..."}
+    
+    Returns:
+        JSON con {success: true, token: "...", created_at: ..., expires_in: 14400, username: "..."}
+        o 401 si credenciales inválidas.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"success": False, "error": "JSON requerido"}), 400
+        
+        username = data.get("username", "").strip()
+        password = data.get("password", "")
+        
+        if not username or not password:
+            return jsonify({"success": False, "error": "Credenciales requeridas"}), 400
+        
+        # Validar credenciales contra .env
+        if not validate_credentials(username, password):
+            return jsonify({"success": False, "error": "Credenciales inválidas"}), 401
+        
+        # Generar token
+        token_data = generate_token()
+        token = token_data["token"]
+        
+        # Guardar en active_tokens con metadata
+        active_tokens[token] = {
+            "username": username,
+            "created_at": token_data["created_at"]
+        }
+        
+        logger.info(f"Token generado para usuario: {username}")
+        
+        return jsonify({
+            "success": True,
+            "token": token,
+            "created_at": token_data["created_at"],
+            "expires_in": token_data["expires_in"],
+            "username": username
+        })
+        
+    except Exception as e:
+        logger.error(f"Error en /api/login: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================================
 # Frontend
 # ============================================================================
 
 @app.route("/")
 def index():
-    """Serve login or the web interface."""
-    # Si no está autenticado, mostrar login
+    """Serve the web interface - redirec to login if not authenticated."""
+    # Si no está autenticado, redirigir al login
     if not flask_session.get("username"):
-        return '''<!DOCTYPE html>
-<html lang="es">
-<head><meta charset="UTF-8"><title>Login - Sistema Timbres</title></head>
-<body style="font-family: sans-serif; padding: 50px; max-width: 400px; margin: 0 auto;">
-<h1>Login - Sistema de Timbres</h1>
-<form method="post" action="/login">
-<p><label>Usuario: <input name="username" required style="padding: 8px; width: 100%; font-size: 16px;"></label></p>
-<p><label>Password: <input type="password" name="password" required style="padding: 8px; width: 100%; font-size: 16px;"></label></p>
-<p><button type="submit" style="padding: 12px 20px; background: #007bff; color: white; border: none; font-size: 16px; cursor: pointer;">Entrar</button></p>
-</form>
-</body>
-</html>''', 200, {"Content-Type": "text/html"}
+        return redirect("/login")
     
     # Si está autenticado, mostrar la interfaz
     html_path = os.path.join(STATIC_DIR, "index.html")
@@ -667,284 +816,6 @@ def index():
             return f.read(), 200, {"Content-Type": "text/html"}
     except FileNotFoundError:
         return jsonify({"error": "HTML no encontrado"}), 404
-
-
-def create_html_interface() -> str:
-    """Genera el HTML de la interfaz web."""
-    return """<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistema de Timbres - Colegio</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-               background: #f5f5f5; padding: 20px; }
-        h1 { color: #333; margin-bottom: 20px; }
-        .container { max-width: 900px; margin: 0 auto; }
-        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; 
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .card h2 { color: #555; margin-bottom: 15px; font-size: 1.2em; }
-        .tipo-section { margin-bottom: 20px; }
-        .tipo-section h3 { color: #333; margin-bottom: 10px; }
-        .horarios-list { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-        .horario-input { width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; 
-                        font-size: 14px; }
-        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; 
-               font-size: 14px; margin-right: 10px; }
-        .btn-primary { background: #007bff; color: white; }
-        .btn-primary:hover { background: #0056b3; }
-        .btn-success { background: #28a745; color: white; }
-        .btn-success:hover { background: #218838; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-danger:hover { background: #c82333; }
-        .btn-secondary { background: #6c757d; color: white; }
-        .btn-secondary:hover { background: #5a6268; }
-        .status { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-        .status-dot { width: 10px; height: 10px; border-radius: 50%; }
-        .status-dot.connected { background: #28a745; }
-        .status-dot.disconnected { background: #dc3545; }
-        .last-played { color: #666; font-size: 0.9em; margin-top: 10px; }
-        .upload-section { margin-top: 20px; }
-        .upload-section input, .upload-section select { padding: 8px; border: 1px solid #ddd; 
-                                                         border-radius: 4px; margin-right: 10px; }
-        .error { background: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px; 
-                margin-bottom: 10px; }
-        .success { background: #d4edda; color: #155724; padding: 10px; border-radius: 4px; 
-                  margin-bottom: 10px; }
-        .queue { font-size: 0.9em; color: #666; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Sistema de Timbres - Colegio</h1>
-        
-        <div class="card">
-            <h2>Estado de Conexión</h2>
-            <div class="status">
-                <div id="status-dot" class="status-dot disconnected"></div>
-                <span id="status-text">Desconectado</span>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h2>Horarios</h2>
-            <div id="horarios-container">Cargando...</div>
-            <button class="btn btn-success" onclick="guardarHorarios()">Guardar Horarios</button>
-            <div id="save-message"></div>
-        </div>
-        
-        <div class="card">
-            <h2>Control de Reproducción</h2>
-            <div id="player-container">Cargando...</div>
-        </div>
-        
-        <div class="card">
-            <h2>Subir Música</h2>
-            <div class="upload-section">
-                <input type="file" id="upload-file" accept=".mp3,.wav,.flac,.ogg,.mp4,.m4a">
-                <select id="upload-tipo">
-                    <option value="entrada">Entrada</option>
-                    <option value="recreo">Recreo</option>
-                    <option value="cambio">Cambio</option>
-                    <option value="salida">Salida</option>
-                </select>
-                <button class="btn btn-primary" onclick="subirArchivo()">Subir</button>
-                <div id="upload-message"></div>
-            </div>
-        </div>
-    </div>
-    
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
-    <script>
-        const TIPO_LABELS = {entrada: 'Entrada', salida: 'Salida', cambio: 'Cambio', recreo: 'Recreo'};
-        const TIPOS = ['entrada', 'salida', 'cambio', 'recreo'];
-        let socket;
-        let horariosData = {};
-        
-        // Conectar WebSocket
-        function connectWebSocket() {
-            socket = io();
-            
-            socket.on('connect', () => {
-                document.getElementById('status-dot').className = 'status-dot connected';
-                document.getElementById('status-text').textContent = 'Conectado';
-            });
-            
-            socket.on('disconnect', () => {
-                document.getElementById('status-dot').className = 'status-dot disconnected';
-                document.getElementById('status-text').textContent = 'Desconectado';
-            });
-            
-            socket.on('estado_actualizado', (data) => {
-                if (data.tipo) actualizarCola(data.tipo);
-            });
-        }
-        
-        // Cargar horarios
-        async function cargarHorarios() {
-            try {
-                const resp = await fetch('/api/horarios');
-                const data = await resp.json();
-                if (data.success) {
-                    horariosData = data.horarios;
-                    renderHorarios();
-                }
-            } catch (e) {
-                console.error('Error cargando horarios:', e);
-            }
-        }
-        
-        // Renderizar horarios
-        function renderHorarios() {
-            const container = document.getElementById('horarios-container');
-            container.innerHTML = TIPOS.map(tipo => `
-                <div class="tipo-section">
-                    <h3>${TIPO_LABELS[tipo]}</h3>
-                    <div class="horarios-list" id="horarios-${tipo}">
-                        ${(horariosData[tipo] || []).map(h => 
-                            `<input type="text" class="horario-input" value="${h}" data-tipo="${tipo}">`
-                        ).join('')}
-                        <button class="btn btn-secondary" onclick="agregarHorario('${tipo}')">+</button>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        // Agregar horario
-        function agregarHorario(tipo) {
-            const container = document.getElementById('horarios-' + tipo);
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'horario-input';
-            input.value = '09:00';
-            input.dataset.tipo = tipo;
-            container.insertBefore(input, container.lastElementChild);
-        }
-        
-        // Guardar horarios
-        async function guardarHorarios() {
-            const nuevosHorarios = {};
-            TIPOS.forEach(tipo => {
-                nuevosHorarios[tipo] = [];
-                document.querySelectorAll('[data-tipo="' + tipo + '"]').forEach(input => {
-                    if (input.value.trim()) nuevosHorarios[tipo].push(input.value.trim());
-                });
-            });
-            
-            try {
-                const resp = await fetch('/api/horarios', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(nuevosHorarios)
-                });
-                const data = await resp.json();
-                const msg = document.getElementById('save-message');
-                if (data.success) {
-                    msg.className = 'success';
-                    msg.textContent = 'Horarios guardados';
-                    horariosData = nuevosHorarios;
-                } else {
-                    msg.className = 'error';
-                    msg.textContent = data.error;
-                }
-                setTimeout(() => msg.textContent = '', 3000);
-            } catch (e) {
-                console.error('Error guardando:', e);
-            }
-        }
-        
-        // Cargar colas
-        async function cargarColas() {
-            const container = document.getElementById('player-container');
-            container.innerHTML = '';
-            for (const tipo of TIPOS) {
-                try {
-                    const resp = await fetch('/api/cola/' + tipo);
-                    const data = await resp.json();
-                    if (data.success) {
-                        container.innerHTML += `
-                            <div class="tipo-section">
-                                <h3>${TIPO_LABELS[tipo]}</h3>
-                                <button class="btn btn-success" onclick="reproducir('${tipo}')">▶ Reproducir</button>
-                                <div class="last-played">Última: ${data.last_played || 'Ninguna'}</div>
-                            </div>
-                        `;
-                    }
-                } catch (e) {
-                    console.error('Error cargando cola:', tipo, e);
-                }
-            }
-        }
-        
-        // Reproducir
-        async function reproducir(tipo) {
-            try {
-                await fetch('/api/reproducir/' + tipo, {method: 'POST'});
-            } catch (e) {
-                console.error('Error reproduciendo:', e);
-            }
-        }
-        
-        // Actualizar cola
-        async function actualizarCola(tipo) {
-            cargarColas();
-        }
-        
-        // Subir archivo
-        async function subirArchivo() {
-            const fileInput = document.getElementById('upload-file');
-            const tipoSelect = document.getElementById('upload-tipo');
-            const msg = document.getElementById('upload-message');
-            
-            if (!fileInput.files[0]) {
-                msg.className = 'error';
-                msg.textContent = 'Selecciona un archivo';
-                return;
-            }
-            
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            formData.append('tipo', tipoSelect.value);
-            
-            try {
-                const resp = await fetch('/api/upload', {method: 'POST', body: formData});
-                const data = await resp.json();
-                if (data.success) {
-                    msg.className = 'success';
-                    msg.textContent = 'Archivo subido: ' + data.path;
-                    cargarColas();
-                } else {
-                    msg.className = 'error';
-                    msg.textContent = data.error;
-                }
-            } catch (e) {
-                msg.className = 'error';
-                msg.textContent = 'Error: ' + e;
-            }
-            setTimeout(() => msg.textContent = '', 3000);
-        }
-        
-        // Init
-        window.onload = () => {
-            connectWebSocket();
-            cargarHorarios();
-            cargarColas();
-        };
-    </script>
-</body>
-</html>"""
-
-
-# Crear directorio templates antes de escribir el HTML
-import os as _os
-_TEMPLATE_DIR = _os.path.join(_os.path.dirname(__file__), "templates")
-_os.makedirs(_TEMPLATE_DIR, exist_ok=True)
-
-# Escribir archivo HTML
-with open(_os.path.join(_TEMPLATE_DIR, "index.html"), "w") as f:
-    f.write(create_html_interface())
 
 
 if __name__ == "__main__":

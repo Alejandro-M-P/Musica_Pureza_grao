@@ -53,17 +53,16 @@ class MusicPlayer:
         return self.carousels[music_type]
 
     def _run_mpv(self, file_path: str) -> int:
-        """Execute mpv subprocess with proper args.
+        """Execute ffplay subprocess with proper args.
 
-        Returns exit code from mpv.
+        Returns exit code from ffplay.
         """
         try:
             result = subprocess.run(
                 [
-                    "mpv",
-                    "--length=35",
-                    "--no-terminal",
-                    "--really-quiet",
+                    "/usr/bin/ffplay",
+                    "-nodisp",
+                    "-autoexit",
                     file_path,
                 ],
                 check=False,
@@ -71,11 +70,11 @@ class MusicPlayer:
             )
             return result.returncode
         except FileNotFoundError:
-            logger.error("mpv not found in PATH")
+            logger.error("ffplay not found in /usr/bin/ffplay")
             return 1
         except subprocess.TimeoutExpired:
-            logger.error(f"mpv timeout for {file_path}")
+            logger.error(f"ffplay timeout for {file_path}")
             return 1
         except Exception as e:
-            logger.error(f"mpv failed: {e}")
+            logger.error(f"ffplay failed: {e}")
             return 1

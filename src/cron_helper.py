@@ -66,7 +66,7 @@ class CronHelper:
 
                 # Cron format: minute hour day month weekday command
                 # Weekday 1-5 = Monday-Friday
-                cron_line = f"{minute} {hour} * * 1-5 {env_vars} cd {PROJECT_DIR} && python3 bell.py {music_type}"
+                cron_line = f"{minute} {hour} * * 1-5 {env_vars} /usr/bin/python3 {PROJECT_DIR}/bell.py {music_type}"
 
                 lines.append(cron_line)
 
@@ -81,6 +81,9 @@ class CronHelper:
         Reads current crontab, checks if our entries already exist,
         and only adds them if they're not present.
         """
+        # Clear existing crontab before adding new entries
+        subprocess.run(["crontab", "-r"], check=False)
+
         try:
             # Read current crontab
             result = subprocess.run(

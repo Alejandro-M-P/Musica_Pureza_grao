@@ -15,9 +15,9 @@
         .card h2 { color: #555; margin-bottom: 15px; font-size: 1.2em; }
         .tipo-section { margin-bottom: 20px; }
         .tipo-section h3 { color: #333; margin-bottom: 10px; }
-        .horarios-list { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-        .horario-input { width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; 
-                        font-size: 14px; }
+        .horarios-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 15px; }
+        .horario-item { display: flex; align-items: center; gap: 4px; background: #e9ecef; padding: 6px 8px; border-radius: 6px; }
+        .horario-item input { width: 70px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; text-align: center; }
         .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; 
                font-size: 14px; margin-right: 10px; }
         .btn-primary { background: #007bff; color: white; }
@@ -28,24 +28,26 @@
         .btn-danger:hover { background: #c82333; }
         .btn-secondary { background: #6c757d; color: white; }
         .btn-secondary:hover { background: #5a6268; }
+        .btn-sm { padding: 6px 10px; font-size: 12px; }
         .status { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
         .status-dot { width: 10px; height: 10px; border-radius: 50%; }
         .status-dot.connected { background: #28a745; }
         .status-dot.disconnected { background: #dc3545; }
         .last-played { color: #666; font-size: 0.9em; margin-top: 10px; }
-        .upload-section { margin-top: 20px; }
-        .upload-section input, .upload-section select { padding: 8px; border: 1px solid #ddd; 
-                                                         border-radius: 4px; margin-right: 10px; }
-        .error { background: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px; 
-                margin-bottom: 10px; }
-        .success { background: #d4edda; color: #155724; padding: 10px; border-radius: 4px; 
-                  margin-bottom: 10px; }
-        .queue { font-size: 0.9em; color: #666; }
+        .canciones-list { margin-top: 10px; border: 1px solid #eee; border-radius: 6px; overflow: hidden; }
+        .cancion-item { display: flex; align-items: center; gap: 8px; padding: 10px; background: #fff; border-bottom: 1px solid #eee; }
+        .cancion-item:last-child { border-bottom: none; }
+        .song-name { flex: 1; font-size: 0.9em; }
+        .mover-select { padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; }
+        .no-canciones { color: #999; font-size: 0.9em; padding: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Sistema de Timbres - Colegio</h1>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h1>Sistema de Timbres - Colegio</h1>
+            <button class="btn btn-secondary btn-sm" onclick="logout()">Cerrar Sesión</button>
+        </div>
         
         <div class="card">
             <h2>Estado de Conexión</h2>
@@ -58,27 +60,26 @@
         <div class="card">
             <h2>Horarios</h2>
             <div id="horarios-container">Cargando...</div>
-            <button class="btn btn-success" onclick="guardarHorarios()">Guardar Horarios</button>
             <div id="save-message"></div>
         </div>
         
         <div class="card">
-            <h2>Control de Reproducción</h2>
+            <h2>Canciones por Carpeta</h2>
             <div id="player-container">Cargando...</div>
         </div>
         
         <div class="card">
             <h2>Subir Música</h2>
-            <div class="upload-section">
-                <input type="file" id="upload-file" accept=".mp3,.wav,.flac,.ogg,.mp4,.m4a">
-                <select id="upload-tipo">
+            <div style="margin-bottom: 10px;">
+                <input type="file" id="upload-file" accept=".mp3,.wav,.flac,.ogg,.mp4,.m4a" style="margin-right: 10px;">
+                <select id="upload-tipo" style="padding: 8px; margin-right: 10px;">
                     <option value="entrada">Entrada</option>
                     <option value="recreo">Recreo</option>
                     <option value="cambio">Cambio</option>
                     <option value="salida">Salida</option>
                 </select>
                 <button class="btn btn-primary" onclick="subirArchivo()">Subir</button>
-                <div id="upload-message"></div>
+                <span id="upload-message"></span>
             </div>
         </div>
     </div>
@@ -90,167 +91,229 @@
         let socket;
         let horariosData = {};
         
-        // Conectar WebSocket
+        // ========== Token Management ==========
+        
+        function getTokenData() {
+            try {
+                const stored = localStorage.getItem('authToken');
+                return stored ? JSON.parse(stored) : null;
+            } catch (e) {
+                return null;
+            }
+        }
+        
+        function isTokenExpired() {
+            const tokenData = getTokenData();
+            if (!tokenData || !tokenData.token || !tokenData.created_at) return true;
+            const now = Date.now() / 1000; // seconds
+            return (tokenData.created_at + tokenData.expires_in) < now;
+        }
+        
+        function checkTokenExpiry() {
+            if (isTokenExpired()) {
+                clearToken();
+                window.location.href = '/login';
+                return true;
+            }
+            return false;
+        }
+        
+        function getAuthHeaders() {
+            checkTokenExpiry();
+            const tokenData = getTokenData();
+            if (tokenData && tokenData.token) {
+                return { 'X-Auth-Token': tokenData.token };
+            }
+            return {};
+        }
+        
+        function saveToken(tokenData) {
+            localStorage.setItem('authToken', JSON.stringify(tokenData));
+        }
+        
+        function clearToken() {
+            localStorage.removeItem('authToken');
+        }
+        
+        // Conexión WebSocket
         function connectWebSocket() {
             socket = io();
-            
             socket.on('connect', () => {
                 document.getElementById('status-dot').className = 'status-dot connected';
                 document.getElementById('status-text').textContent = 'Conectado';
             });
-            
             socket.on('disconnect', () => {
                 document.getElementById('status-dot').className = 'status-dot disconnected';
                 document.getElementById('status-text').textContent = 'Desconectado';
-            });
-            
-            socket.on('estado_actualizado', (data) => {
-                if (data.tipo) actualizarCola(data.tipo);
             });
         }
         
         // Cargar horarios
         async function cargarHorarios() {
             try {
-                const resp = await fetch('/api/horarios');
+                const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
+                const resp = await fetch('/api/horarios', { headers: headers });
                 const data = await resp.json();
                 if (data.success) {
                     horariosData = data.horarios;
                     renderHorarios();
                 }
             } catch (e) {
-                console.error('Error cargando horarios:', e);
+                console.error('Error:', e);
             }
         }
         
-        // Renderizar horarios
+        // Renderizar horarios con botones eliminar
         function renderHorarios() {
             const container = document.getElementById('horarios-container');
-            container.innerHTML = TIPOS.map(tipo => `
-                <div class="tipo-section">
-                    <h3>${TIPO_LABELS[tipo]}</h3>
-                    <div class="horarios-list" id="horarios-${tipo}">
-                        ${(horariosData[tipo] || []).map(h => 
-                            `<input type="text" class="horario-input" value="${h}" data-tipo="${tipo}">`
-                        ).join('')}
-                        <button class="btn btn-secondary" onclick="agregarHorario('${tipo}')">+</button>
-                    </div>
-                </div>
-            `).join('');
+            let html = '';
+            for (const tipo of TIPOS) {
+                const horas = horariosData[tipo] || [];
+                html += '<div class="tipo-section"><h3>' + TIPO_LABELS[tipo] + '</h3><div class="horarios-row">';
+                for (let i = 0; i < horas.length; i++) {
+                    html += '<div class="horario-item">';
+                    html += '<input type="text" value="' + horas[i] + '" onchange="guardarHorarios()">';
+                    html += '<button class="btn btn-danger btn-sm" onclick="eliminarHorario(\'' + tipo + '\',' + i + ')">X</button>';
+                    html += '</div>';
+                }
+                html += '<button class="btn btn-secondary btn-sm" onclick="agregarHorario(\'' + tipo + '\')">+</button>';
+                html += '</div></div>';
+            }
+            container.innerHTML = html;
         }
         
-        // Agregar horario
         function agregarHorario(tipo) {
-            const container = document.getElementById('horarios-' + tipo);
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'horario-input';
-            input.value = '09:00';
-            input.dataset.tipo = tipo;
-            container.insertBefore(input, container.lastElementChild);
+            if (!horariosData[tipo]) horariosData[tipo] = [];
+            horariosData[tipo].push('09:00');
+            guardarHorarios();
+        }
+        
+        function eliminarHorario(tipo, index) {
+            if (horariosData[tipo] && horariosData[tipo].length > index) {
+                horariosData[tipo].splice(index, 1);
+                guardarHorarios();
+            }
         }
         
         // Guardar horarios
         async function guardarHorarios() {
-            const nuevosHorarios = {};
-            TIPOS.forEach(tipo => {
-                nuevosHorarios[tipo] = [];
-                document.querySelectorAll('[data-tipo="' + tipo + '"]').forEach(input => {
-                    if (input.value.trim()) nuevosHorarios[tipo].push(input.value.trim());
+            const nuevos = {};
+            for (const tipo of TIPOS) {
+                nuevos[tipo] = [];
+                document.querySelectorAll('.horario-item input').forEach(input => {
+                    const val = input.value.trim();
+                    if (val) nuevos[tipo].push(val);
                 });
-            });
-            
+            }
             try {
+                const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
                 const resp = await fetch('/api/horarios', {
                     method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(nuevosHorarios)
+                    headers: headers,
+                    body: JSON.stringify(nuevos)
                 });
                 const data = await resp.json();
                 const msg = document.getElementById('save-message');
                 if (data.success) {
-                    msg.className = 'success';
-                    msg.textContent = 'Horarios guardados';
-                    horariosData = nuevosHorarios;
-                } else {
-                    msg.className = 'error';
-                    msg.textContent = data.error;
+                    msg.textContent = 'Guardado';
+                    msg.style.color = 'green';
                 }
-                setTimeout(() => msg.textContent = '', 3000);
-            } catch (e) {
-                console.error('Error guardando:', e);
-            }
+                setTimeout(() => msg.textContent = '', 2000);
+            } catch (e) { console.error(e); }
         }
         
-        // Cargar colas
+        // Cargar canciones de cada carpeta
         async function cargarColas() {
             const container = document.getElementById('player-container');
             container.innerHTML = '';
             for (const tipo of TIPOS) {
                 try {
-                    const resp = await fetch('/api/cola/' + tipo);
-                    const data = await resp.json();
-                    if (data.success) {
-                        container.innerHTML += `
-                            <div class="tipo-section">
-                                <h3>${TIPO_LABELS[tipo]}</h3>
-                                <button class="btn btn-success" onclick="reproducir('${tipo}')">▶ Reproducir</button>
-                                <div class="last-played">Última: ${data.last_played || 'Ninguna'}</div>
-                            </div>
-                        `;
+                    const respSongs = await fetch('/api/canciones/' + tipo);
+                    const dataSongs = await respSongs.json();
+                    
+                    let html = '<div class="tipo-section"><h3>' + TIPO_LABELS[tipo] + '</h3>';
+                    
+                    if (dataSongs.success && dataSongs.canciones.length > 0) {
+                        html += '<div class="canciones-list">';
+                        for (const song of dataSongs.canciones) {
+                            html += '<div class="cancion-item">';
+                            html += '<span class="song-name">' + song.nombre + '</span>';
+                            html += '<select class="mover-select" onchange="moverCancion(\'' + song.path + '\', this.value)">';
+                            html += '<option value="">Mover</option>';
+                            for (const t of TIPOS) {
+                                if (t !== tipo) html += '<option value="' + t + '">' + TIPO_LABELS[t] + '</option>';
+                            }
+                            html += '</select>';
+                            html += '<button class="btn btn-danger btn-sm" onclick="eliminarCancion(\'' + song.path + '\')">X</button>';
+                            html += '</div>';
+                        }
+                        html += '</div>';
+                    } else {
+                        html += '<div class="no-canciones">Sin canciones</div>';
                     }
+                    html += '</div>';
+                    container.innerHTML += html;
                 } catch (e) {
-                    console.error('Error cargando cola:', tipo, e);
+                    console.error('Error:', tipo, e);
                 }
             }
         }
         
-        // Reproducir
-        async function reproducir(tipo) {
+        async function moverCancion(path, destino) {
+            if (!destino) return;
+            if (!confirm('Mover a ' + TIPO_LABELS[destino] + '?')) return;
             try {
-                await fetch('/api/reproducir/' + tipo, {method: 'POST'});
-            } catch (e) {
-                console.error('Error reproduciendo:', e);
-            }
+                const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
+                const resp = await fetch('/api/cancion/mover', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({path: path, destino: destino})
+                });
+                const data = await resp.json();
+                if (data.success) cargarColas();
+                else alert('Error: ' + data.error);
+            } catch (e) { console.error(e); }
         }
         
-        // Actualizar cola
-        async function actualizarCola(tipo) {
-            cargarColas();
+        async function eliminarCancion(path) {
+            if (!confirm('Eliminar esta canción?')) return;
+            try {
+                const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
+                const resp = await fetch('/api/cancion', {
+                    method: 'DELETE',
+                    headers: headers,
+                    body: JSON.stringify({path: path})
+                });
+                const data = await resp.json();
+                if (data.success) cargarColas();
+                else alert('Error: ' + data.error);
+            } catch (e) { console.error(e); }
         }
         
-        // Subir archivo
         async function subirArchivo() {
             const fileInput = document.getElementById('upload-file');
             const tipoSelect = document.getElementById('upload-tipo');
             const msg = document.getElementById('upload-message');
-            
-            if (!fileInput.files[0]) {
-                msg.className = 'error';
-                msg.textContent = 'Selecciona un archivo';
-                return;
-            }
-            
+            if (!fileInput.files[0]) { msg.textContent = 'Selecciona archivo'; return; }
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
             formData.append('tipo', tipoSelect.value);
-            
             try {
-                const resp = await fetch('/api/upload', {method: 'POST', body: formData});
+                const headers = getAuthHeaders();
+                const resp = await fetch('/api/upload', {method: 'POST', headers: headers, body: formData});
                 const data = await resp.json();
                 if (data.success) {
-                    msg.className = 'success';
-                    msg.textContent = 'Archivo subido: ' + data.path;
+                    msg.textContent = 'Subido: ' + data.path;
                     cargarColas();
-                } else {
-                    msg.className = 'error';
-                    msg.textContent = data.error;
-                }
-            } catch (e) {
-                msg.className = 'error';
-                msg.textContent = 'Error: ' + e;
-            }
+                } else { msg.textContent = 'Error: ' + data.error; }
+            } catch (e) { msg.textContent = 'Error'; }
             setTimeout(() => msg.textContent = '', 3000);
+        }
+        
+        // Logout - clears token and redirects to login
+        function logout() {
+            clearToken();
+            window.location.href = '/login';
         }
         
         // Init
@@ -258,6 +321,10 @@
             connectWebSocket();
             cargarHorarios();
             cargarColas();
+            // Verificar expiry de token cada 60 segundos
+            setInterval(checkTokenExpiry, 60000);
+            // Verificar al cargar también
+            checkTokenExpiry();
         };
     </script>
 </body>
