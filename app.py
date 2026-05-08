@@ -34,7 +34,7 @@ def validate_credentials(username: str, password: str) -> bool:
     """Valida usuario y contraseña contra .env"""
     return username == WEB_USER and password == WEB_PASSWORD
 
-from flask import Flask, session, jsonify, request, send_from_directory, redirect
+from flask import Flask, session as flask_session, jsonify, request, send_from_directory, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
@@ -719,6 +719,9 @@ document.getElementById('login-form').onsubmit = async (e) => {
         "created_at": token_data["created_at"]
     }
     
+    # Setear sesión para navegación normal
+    flask_session["username"] = username
+    
     logger.info(f"User logged in: {username}")
     
     # Generar HTML que guarda token y redirige
@@ -783,6 +786,9 @@ def api_login():
             "created_at": token_data["created_at"]
         }
         
+        # Setear sesión para navegación normal
+        flask_session["username"] = username
+        
         logger.info(f"Token generado para usuario: {username}")
         
         return jsonify({
@@ -804,12 +810,22 @@ def api_login():
 
 @app.route("/")
 def index():
-    """Serve the web interface - redirec to login if not authenticated."""
-    # Si no está autenticado, redirigir al login
-    if not flask_session.get("username"):
-        return redirect("/login")
+    """Serve the web interface - redirect to login if not authenticated."""
+    # Check 1: Flask session (cookie-based)
+    if flask_session.get("username"):
+        return serve_index_html()
     
-    # Si está autenticado, mostrar la interfaz
+    # Check 2: Token header (X-Auth-Token)
+    token = request.headers.get("X-Auth-Token")
+    if token and validate_token(token):
+        return serve_index_html()
+    
+    # No autenticado - redirigir a login
+    return redirect("/login")
+
+
+def serve_index_html():
+    """Serve the main HTML file."""
     html_path = os.path.join(STATIC_DIR, "index.html")
     try:
         with open(html_path, "r") as f:

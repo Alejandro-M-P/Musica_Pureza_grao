@@ -172,7 +172,7 @@
                 html += '<div class="tipo-section"><h3>' + TIPO_LABELS[tipo] + '</h3><div class="horarios-row">';
                 for (let i = 0; i < horas.length; i++) {
                     html += '<div class="horario-item">';
-                    html += '<input type="text" value="' + horas[i] + '" onchange="guardarHorarios()">';
+                    html += '<input type="text" value="' + horas[i] + '" data-tipo="' + tipo + '" data-index="' + i + '" onchange="editarHorario(this)">';
                     html += '<button class="btn btn-danger btn-sm" onclick="eliminarHorario(\'' + tipo + '\',' + i + ')">X</button>';
                     html += '</div>';
                 }
@@ -185,38 +185,42 @@
         function agregarHorario(tipo) {
             if (!horariosData[tipo]) horariosData[tipo] = [];
             horariosData[tipo].push('09:00');
+            renderHorarios();
             guardarHorarios();
         }
         
         function eliminarHorario(tipo, index) {
             if (horariosData[tipo] && horariosData[tipo].length > index) {
                 horariosData[tipo].splice(index, 1);
+                renderHorarios();
+                guardarHorarios();
+            }
+        }
+        
+        function editarHorario(input) {
+            const tipo = input.dataset.tipo;
+            const index = parseInt(input.dataset.index);
+            if (horariosData[tipo] && horariosData[tipo][index] !== undefined) {
+                horariosData[tipo][index] = input.value.trim();
                 guardarHorarios();
             }
         }
         
         // Guardar horarios
         async function guardarHorarios() {
-            const nuevos = {};
-            for (const tipo of TIPOS) {
-                nuevos[tipo] = [];
-                document.querySelectorAll('.horario-item input').forEach(input => {
-                    const val = input.value.trim();
-                    if (val) nuevos[tipo].push(val);
-                });
-            }
             try {
                 const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
                 const resp = await fetch('/api/horarios', {
                     method: 'PUT',
                     headers: headers,
-                    body: JSON.stringify(nuevos)
+                    body: JSON.stringify(horariosData)
                 });
                 const data = await resp.json();
                 const msg = document.getElementById('save-message');
                 if (data.success) {
                     msg.textContent = 'Guardado';
                     msg.style.color = 'green';
+                    cargarHorarios();
                 }
                 setTimeout(() => msg.textContent = '', 2000);
             } catch (e) { console.error(e); }
