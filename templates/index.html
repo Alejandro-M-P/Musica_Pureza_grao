@@ -206,7 +206,7 @@
                 html += '<div class="duracion-control" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">';
                 html += '<label style="font-size: 0.9em; color: #555;">⏱</label>';
                 html += '<input type="number" min="5" max="600" placeholder="30" style="width: 70px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;"';
-                html += '       data-tipo="' + tipo + '" id="dur-input-' + tipo + '" value="' + inputVal + '"' + disabledAttr + '>';
+                html += '       data-tipo="' + tipo + '" id="dur-input-' + tipo + '" value="' + inputVal + '"' + disabledAttr + ' onchange="guardarHorarios()">';
                 html += '<label style="font-size: 0.9em; display: flex; align-items: center; gap: 4px; cursor: pointer;">';
                 html += '<input type="checkbox" data-tipo="' + tipo + '" id="dur-check-' + tipo + '"' + checkedAttr + ' onchange="onChangeDuracionCheckbox(this)"> Canción completa';
                 html += '</label>';
@@ -250,7 +250,7 @@
             void toast.offsetWidth;
             toast.classList.add('show');
             clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(() => toast.classList.remove('show'), 2500);
+            toast._timeout = setTimeout(() => toast.classList.remove('show'), 3000);
         }
         
         // Checkbox change handler for duracion controls
@@ -266,6 +266,7 @@
                 input.disabled = false;
                 badge.style.display = 'none';
             }
+            guardarHorarios();
         }
 
         // Guardar horarios
