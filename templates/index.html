@@ -40,6 +40,19 @@
         .song-name { flex: 1; font-size: 0.9em; }
         .mover-select { padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; }
         .no-canciones { color: #999; font-size: 0.9em; padding: 10px; }
+        .toast {
+            position: fixed; bottom: 30px; right: 30px;
+            background: #28a745; color: white; padding: 14px 24px;
+            border-radius: 8px; font-size: 15px; font-weight: 500;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+            opacity: 0; transform: translateY(20px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            z-index: 9999; pointer-events: none;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { background: #dc3545; }
+        .duracion-control input:disabled { background: #f0f0f0; color: #999; }
+        .duracion-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; }
     </style>
 </head>
 <body>
@@ -62,6 +75,7 @@
             <div id="horarios-container">Cargando...</div>
             <div id="save-message"></div>
         </div>
+        <div id="toast" class="toast"></div>
         
         <div class="card">
             <h2>Canciones por Carpeta</h2>
@@ -90,6 +104,7 @@
         const TIPOS = ['entrada', 'salida', 'cambio', 'recreo'];
         let socket;
         let horariosData = {};
+        let duracionesData = {};
         
         // ========== Token Management ==========
         
@@ -156,6 +171,7 @@
                 const data = await resp.json();
                 if (data.success) {
                     horariosData = data.horarios;
+                    duracionesData = data.duraciones || {};
                     renderHorarios();
                 }
             } catch (e) {
@@ -177,7 +193,27 @@
                     html += '</div>';
                 }
                 html += '<button class="btn btn-secondary btn-sm" onclick="agregarHorario(\'' + tipo + '\')">+</button>';
-                html += '</div></div>';
+                html += '</div>'; // close horarios-row
+
+                // Duration controls
+                const durVal = duracionesData[tipo];
+                const isFullSong = durVal === null || durVal === undefined;
+                const inputVal = isFullSong ? '' : durVal;
+                const checkedAttr = isFullSong ? ' checked' : '';
+                const disabledAttr = isFullSong ? ' disabled' : '';
+                const badgeStyle = isFullSong ? '' : ' display:none;';
+
+                html += '<div class="duracion-control" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">';
+                html += '<label style="font-size: 0.9em; color: #555;">⏱</label>';
+                html += '<input type="number" min="5" max="600" placeholder="30" style="width: 70px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;"';
+                html += '       data-tipo="' + tipo + '" id="dur-input-' + tipo + '" value="' + inputVal + '"' + disabledAttr + '>';
+                html += '<label style="font-size: 0.9em; display: flex; align-items: center; gap: 4px; cursor: pointer;">';
+                html += '<input type="checkbox" data-tipo="' + tipo + '" id="dur-check-' + tipo + '"' + checkedAttr + ' onchange="onChangeDuracionCheckbox(this)"> Canción completa';
+                html += '</label>';
+                html += '<span id="dur-badge-' + tipo + '" style="color: #28a745; font-size: 0.85em; font-weight: 500;' + badgeStyle + '">♾ Completa</span>';
+                html += '</div>';
+
+                html += '</div>'; // close tipo-section
             }
             container.innerHTML = html;
         }
@@ -206,24 +242,63 @@
             }
         }
         
+        function mostrarToast(texto, error) {
+            const toast = document.getElementById('toast');
+            toast.textContent = texto;
+            toast.className = 'toast' + (error ? ' error' : '');
+            // Forzar reflow para reiniciar animación
+            void toast.offsetWidth;
+            toast.classList.add('show');
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => toast.classList.remove('show'), 2500);
+        }
+        
+        // Checkbox change handler for duracion controls
+        function onChangeDuracionCheckbox(checkbox) {
+            const tipo = checkbox.dataset.tipo;
+            const input = document.getElementById('dur-input-' + tipo);
+            const badge = document.getElementById('dur-badge-' + tipo);
+            if (checkbox.checked) {
+                input.disabled = true;
+                input.value = '';
+                badge.style.display = '';
+            } else {
+                input.disabled = false;
+                badge.style.display = 'none';
+            }
+        }
+
         // Guardar horarios
         async function guardarHorarios() {
             try {
+                // Read duration controls from DOM
+                const durData = {};
+                for (const tipo of TIPOS) {
+                    const checkbox = document.getElementById('dur-check-' + tipo);
+                    const input = document.getElementById('dur-input-' + tipo);
+                    if (checkbox && input) {
+                        durData[tipo] = checkbox.checked ? null : (parseInt(input.value) || null);
+                    }
+                }
+
                 const headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
                 const resp = await fetch('/api/horarios', {
                     method: 'PUT',
                     headers: headers,
-                    body: JSON.stringify(horariosData)
+                    body: JSON.stringify({...horariosData, duraciones: durData})
                 });
                 const data = await resp.json();
-                const msg = document.getElementById('save-message');
                 if (data.success) {
-                    msg.textContent = 'Guardado';
-                    msg.style.color = 'green';
-                    cargarHorarios();
+                    mostrarToast('✅ Horarios guardados');
+                    // Recargar después de un breve delay para que se vea el toast
+                    setTimeout(cargarHorarios, 800);
+                } else {
+                    mostrarToast('❌ Error: ' + (data.error || 'desconocido'), true);
                 }
-                setTimeout(() => msg.textContent = '', 2000);
-            } catch (e) { console.error(e); }
+            } catch (e) {
+                mostrarToast('❌ Error de conexión', true);
+                console.error(e);
+            }
         }
         
         // Cargar canciones de cada carpeta

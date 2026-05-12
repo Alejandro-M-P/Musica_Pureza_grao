@@ -288,14 +288,15 @@ def handle_disconnect():
 
 @app.route("/api/horarios", methods=["GET"])
 def get_horarios():
-    """GET /api/horarios — Retorna todos los horarios configurados.
+    """GET /api/horarios — Retorna todos los horarios y duraciones configurados.
     
     Returns:
-        JSON con estructura: {"entrada": ["08:05", "15:15"], ...}
+        JSON con estructura: {"entrada": [...], ..., "duraciones": {...}}
     """
     try:
         schedule = load_schedule()
-        return jsonify({"success": True, "horarios": schedule})
+        duraciones = state_manager.get_durations()
+        return jsonify({"success": True, "horarios": schedule, "duraciones": duraciones})
     except Exception as e:
         logger.error(f"Error GET /api/horarios: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -323,10 +324,11 @@ def exportar_backup():
 @app.route("/api/horarios", methods=["PUT"])
 @require_auth
 def put_horarios():
-    """PUT /api/horarios — Actualiza los horarios.
+    """PUT /api/horarios — Actualiza los horarios y opcionalmente las duraciones.
     
     Body JSON:
-        {"entrada": ["08:05", "15:15"], "cambio": [...], ...}
+        {"entrada": ["08:05", "15:15"], "cambio": [...], ...,
+         "duraciones": {"entrada": 30, "salida": null}}
     
     Returns:
         JSON con {"success": True} o error.
@@ -336,8 +338,8 @@ def put_horarios():
         
         if not data or not isinstance(data, dict):
             return jsonify({"success": False, "error": "JSON inválido"}), 400
-        
-        # Validar estructura base
+
+        # Validar estructura base (skip duraciones — no es un tipo de música)
         for tipo in MUSIC_TYPES:
             if tipo not in data:
                 return jsonify({"success": False, "error": f"Falta tipo: {tipo}"}), 400
@@ -350,13 +352,41 @@ def put_horarios():
                 if not validate_hour(hora):
                     return jsonify({"success": False, "error": f"Hora inválida: {hora}"}), 400
 
-        # Guardar en StateManager (carousel.json)
-        state_manager.update_schedule(data)
+        # Validar duraciones si presente
+        if "duraciones" in data:
+            duraciones = data["duraciones"]
+            if not isinstance(duraciones, dict):
+                return jsonify({"success": False, "error": "duraciones debe ser un objeto"}), 400
+
+            for tipo, valor in duraciones.items():
+                if valor is not None:
+                    if isinstance(valor, bool) or not isinstance(valor, int):
+                        return jsonify({
+                            "success": False,
+                            "error": f"Duración '{tipo}' debe ser entero (5-600) o null"
+                        }), 400
+                    if valor < 5 or valor > 600:
+                        return jsonify({
+                            "success": False,
+                            "error": f"Duración '{tipo}' debe estar entre 5 y 600"
+                        }), 400
+
+        # Extraer solo los horarios (sin duraciones) para guardar schedule
+        schedule_data = {t: data[t] for t in MUSIC_TYPES}
+        state_manager.update_schedule(schedule_data)
+
+        # Guardar duraciones si presentes
+        if "duraciones" in data:
+            state_manager.update_durations(data["duraciones"])
+
+        # Regenerar crontab con los nuevos horarios
+        from src.cron_helper import CronHelper
+        CronHelper().setup()
 
         # Broadcast a clientes
         broadcast_estado()
         
-        logger.info(f"Horarios actualizados: {data}")
+        logger.info(f"Horarios actualizados: {schedule_data}")
         return jsonify({"success": True})
     except Exception as e:
         logger.error(f"Error PUT /api/horarios: {e}")

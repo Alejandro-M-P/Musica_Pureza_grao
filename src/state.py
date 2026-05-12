@@ -110,3 +110,27 @@ class StateManager:
         schedule = self.get_schedule()
         schedule[music_type] = times
         self.update_schedule(schedule)
+
+    # Duration management (segundos por tipo de música)
+    def get_durations(self) -> dict:
+        """Returns full durations mapping, or {} if not set."""
+        return self.load().get("durations", {})
+
+    def get_duration(self, tipo: str) -> int | None:
+        """Get seconds for a music type.
+
+        Returns:
+            30 if no durations key exists at all (default).
+            None if durations key exists but tipo is absent or null (full song).
+            int if durations key exists and tipo has a numeric value.
+        """
+        state = self.load()
+        if "durations" not in state:
+            return 30
+        return state["durations"].get(tipo)
+
+    def update_durations(self, durations: dict) -> None:
+        """Persist durations mapping under 'durations' key."""
+        state = self.load()
+        state["durations"] = durations
+        self.save(state)

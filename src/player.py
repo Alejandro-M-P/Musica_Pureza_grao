@@ -34,8 +34,11 @@ class MusicPlayer:
             # Get next song
             song_path = carousel.next_song()
 
+            # Get duration for this music type
+            duration = self.state.get_duration(music_type)
+
             # Play with mpv
-            self._run_mpv(song_path)
+            self._run_mpv(song_path, duration)
 
             logger.info(f"Played {music_type}/{song_path.split('/')[-1]}")
 
@@ -52,21 +55,31 @@ class MusicPlayer:
             )
         return self.carousels[music_type]
 
-    def _run_mpv(self, file_path: str) -> int:
+    def _run_mpv(self, file_path: str, duration: int | None = None) -> int:
         """Execute ffplay subprocess with proper args.
+
+        When duration is set (>0), adds -t N flag and adjusts timeout.
+        When duration is None or 0 (full song), plays with 600s timeout.
 
         Returns exit code from ffplay.
         """
         try:
+            cmd = [
+                "/usr/bin/ffplay",
+                "-nodisp",
+                "-autoexit",
+            ]
+            if duration is not None and duration > 0:
+                cmd.extend(["-t", str(duration)])
+                timeout = max(40, min(600, duration * 2 + 5))
+            else:
+                timeout = 600  # Canción completa — timeout generoso
+            cmd.append(file_path)
+
             result = subprocess.run(
-                [
-                    "/usr/bin/ffplay",
-                    "-nodisp",
-                    "-autoexit",
-                    file_path,
-                ],
+                cmd,
                 check=False,
-                timeout=40,
+                timeout=timeout,
             )
             return result.returncode
         except FileNotFoundError:
